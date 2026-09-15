@@ -8,6 +8,7 @@ import {
   StatusBar,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useInvestment } from '../context/InvestmentContext';
@@ -17,6 +18,11 @@ import AddTransactionModal from '../components/AddTransactionModal';
 import EditFundValueModal from '../components/EditFundValueModal';
 import EditTransactionModal from '../components/EditTransactionModal';
 import { MFFund, MFTransaction } from '../types';
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
 
 export default function MutualFundsScreen() {
   const {
@@ -100,9 +106,7 @@ export default function MutualFundsScreen() {
         if (parts.length >= 2) {
           const year = parseInt(parts[0], 10);
           const monthIndex = parseInt(parts[1], 10) - 1;
-          const monthName = new Date(year, monthIndex, 1).toLocaleString('default', {
-            month: 'long',
-          });
+          const monthName = MONTH_NAMES[monthIndex] || 'Unknown';
           groupKey = `${monthName} ${year}`;
         }
       }
@@ -136,9 +140,16 @@ export default function MutualFundsScreen() {
 
       {/* Screen Header */}
       <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Mutual Funds</Text>
-          <Text style={styles.headerSubtitle}>SIP & AMFI Real-time Tracking</Text>
+        <View style={styles.headerTitleRow}>
+          <Image
+            source={require('../../assets/ownwealth-logo.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          <View>
+            <Text style={styles.headerTitle}>Mutual Funds</Text>
+            <Text style={styles.headerSubtitle}>SIP & AMFI Real-time Tracking</Text>
+          </View>
         </View>
 
         <TouchableOpacity
@@ -573,8 +584,19 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 12,
   },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  headerLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    marginRight: 10,
+  },
   headerTitle: {
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: '800',
     color: '#F8FAFC',
     letterSpacing: -0.5,

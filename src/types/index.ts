@@ -39,3 +39,31 @@ export interface PortfolioSummary {
   absoluteReturn: number;
   percentageReturn: number;
 }
+
+export interface Stock {
+  id: number;
+  name: string;
+  symbol?: string; // Ticker e.g. RELIANCE, TCS, INFY
+  current_value: number; // Calculated from (total_quantity * current_price) or user-entered
+  current_price?: number; // Latest market price / CMP per share
+  price_date?: string; // Date of latest price
+  day_change_pct?: number; // Day change %
+  updated_at?: string;
+  total_invested?: number; // Calculated from transaction history: SUM(BUY) - SUM(SELL) - SUM(DIVIDEND)
+  total_quantity?: number; // Calculated from transactions: SUM(BUY qty) - SUM(SELL qty)
+  transaction_count?: number;
+  avg_buy_price?: number; // Calculated: total_invested / total_quantity
+}
+
+export interface StockTransaction {
+  id: number;
+  stock_id: number;
+  stock_name?: string;
+  stock_symbol?: string;
+  date: string; // YYYY-MM-DD
+  type: 'BUY' | 'SELL' | 'DIVIDEND';
+  price: number; // Buy/Sale price per share or Dividend per share
+  quantity: number; // Number of stock / shares
+  amount: number; // Auto-calculated: price * quantity
+  created_at?: string;
+}

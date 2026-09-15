@@ -5,8 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 import { InvestmentProvider } from './src/context/InvestmentContext';
 import NetWorthScreen from './src/screens/NetWorthScreen';
 import MutualFundsScreen from './src/screens/MutualFundsScreen';
+import IndianStocksScreen from './src/screens/IndianStocksScreen';
 
-type TabType = 'networth' | 'mutualfunds';
+type TabType = 'networth' | 'mutualfunds' | 'stocks';
 
 function MainApp() {
   const [currentTab, setCurrentTab] = useState<TabType>('networth');
@@ -18,7 +19,11 @@ function MainApp() {
 
       {/* Screens View */}
       <View style={styles.screenContainer}>
-        {currentTab === 'networth' ? <NetWorthScreen /> : <MutualFundsScreen />}
+        {currentTab === 'networth' && (
+          <NetWorthScreen onNavigate={(tab) => setCurrentTab(tab)} />
+        )}
+        {currentTab === 'mutualfunds' && <MutualFundsScreen />}
+        {currentTab === 'stocks' && <IndianStocksScreen />}
       </View>
 
       {/* Bottom Navigation Bar */}
@@ -63,6 +68,23 @@ function MainApp() {
             Mutual Funds
           </Text>
           {currentTab === 'mutualfunds' && <View style={styles.tabIndicator} />}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, currentTab === 'stocks' && styles.activeTabItem]}
+          onPress={() => setCurrentTab('stocks')}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.tabIcon}>💹</Text>
+          <Text
+            style={[
+              styles.tabLabel,
+              currentTab === 'stocks' ? styles.activeTabLabel : styles.inactiveTabLabel,
+            ]}
+          >
+            Indian Stocks
+          </Text>
+          {currentTab === 'stocks' && <View style={styles.tabIndicator} />}
         </TouchableOpacity>
       </View>
     </View>

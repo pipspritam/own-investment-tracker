@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { AssetAllocation, MFFund, MFTransaction } from '../types';
+import { AssetAllocation, MFFund, MFTransaction, Stock, StockTransaction } from '../types';
 
 const DB_NAME = 'investments.db';
 let dbInstance: SQLite.SQLiteDatabase | null = null;
@@ -47,6 +47,29 @@ function initDatabase(database: SQLite.SQLiteDatabase) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(fund_id) REFERENCES mf_funds(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS stocks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      symbol TEXT,
+      current_value REAL NOT NULL DEFAULT 0,
+      current_price REAL DEFAULT 0,
+      price_date TEXT,
+      day_change_pct REAL,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS stock_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stock_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      price REAL NOT NULL,
+      quantity REAL NOT NULL,
+      amount REAL NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(stock_id) REFERENCES stocks(id) ON DELETE CASCADE
+    );
   `);
 
   // Migration: Ensure current_value, scheme_code, current_nav, nav_date, and updated_at columns exist
@@ -67,6 +90,23 @@ function initDatabase(database: SQLite.SQLiteDatabase) {
   }
   try {
     database.execSync(`ALTER TABLE mf_funds ADD COLUMN updated_at TEXT;`);
+  } catch {
+    // Column already exists
+  }
+
+  // Migration: Ensure stocks have price tracking columns
+  try {
+    database.execSync(`ALTER TABLE stocks ADD COLUMN current_price REAL DEFAULT 0;`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    database.execSync(`ALTER TABLE stocks ADD COLUMN price_date TEXT;`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    database.execSync(`ALTER TABLE stocks ADD COLUMN day_change_pct REAL;`);
   } catch {
     // Column already exists
   }
@@ -99,15 +139,16 @@ function initDatabase(database: SQLite.SQLiteDatabase) {
     }
   }
 
-  // Always keep Mutual Fund allocation in asset_allocations in sync with transactions and fund values
+  // Always keep Mutual Fund and Stock allocations in asset_allocations in sync with transactions and holdings
   syncMutualFundAssetAllocation(database);
+  syncStockAssetAllocation(database);
 }
 
 function seedDatabase(database: SQLite.SQLiteDatabase) {
-  // Other assets are seeded. Mutual Fund starts at 0 invested and 0 current value until user enters them.
+  // Mutual Fund and Stock start at 0 invested and 0 current value until user enters them.
   const initialAssets = [
     { type: 'Mutual Fund', invested: 0, current: 0 },
-    { type: 'Stock', invested: 80000, current: 86529 },
+    { type: 'Stock', invested: 0, current: 0 },
     { type: 'EPF', invested: 230000, current: 249444 },
     { type: 'Gold', invested: 80000, current: 90682 },
     { type: 'TI ESPP', invested: 42000, current: 48000 },
@@ -123,7 +164,6 @@ function seedDatabase(database: SQLite.SQLiteDatabase) {
         [a.type, a.invested, a.current]
       );
     }
-    // Note: mf_funds is intentionally left empty so initially there are no mutual fund options
   });
 }
 
@@ -149,6 +189,32 @@ export function syncMutualFundAssetAllocation(database: SQLite.SQLiteDatabase) {
     `UPDATE asset_allocations 
      SET invested_amount = ?, current_value = ?, updated_at = datetime('now')
      WHERE asset_type = 'Mutual Fund';`,
+    [totalInvested, totalCurrent]
+  );
+}
+
+/**
+ * Synchronizes the 'Stock' entry in asset_allocations:
+ * - invested_amount is dynamically calculated as the net sum of all buy/sell transactions
+ * - current_value is dynamically calculated as the sum of current_value across all stocks
+ */
+export function syncStockAssetAllocation(database: SQLite.SQLiteDatabase) {
+  const totalInvestedResult = database.getFirstSync<{ total_invested: number }>(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'BUY' THEN amount WHEN type = 'SELL' THEN -amount WHEN type = 'DIVIDEND' THEN -amount ELSE 0 END), 0) as total_invested
+    FROM stock_transactions;
+  `);
+  const totalInvested = totalInvestedResult?.total_invested ?? 0;
+
+  const totalCurrentResult = database.getFirstSync<{ total_current: number }>(`
+    SELECT COALESCE(SUM(current_value), 0) as total_current
+    FROM stocks;
+  `);
+  const totalCurrent = totalCurrentResult?.total_current ?? 0;
+
+  database.runSync(
+    `UPDATE asset_allocations 
+     SET invested_amount = ?, current_value = ?, updated_at = datetime('now')
+     WHERE asset_type = 'Stock';`,
     [totalInvested, totalCurrent]
   );
 }
@@ -415,6 +481,51 @@ export function fetchTransactions(): MFTransaction[] {
   `);
 }
 
+/**
+ * Synchronizes an individual mutual fund's current valuation:
+ * - If no transactions remain for the fund, resets current_value to 0
+ * - If current_nav is present (> 0), recalculates current_value = total_units * current_nav
+ * - Otherwise preserves user-entered current_value
+ */
+export function syncFundCurrentValue(database: SQLite.SQLiteDatabase, fundId: number) {
+  const fund = database.getFirstSync<MFFund>(
+    'SELECT * FROM mf_funds WHERE id = ?;',
+    [fundId]
+  );
+  if (!fund) return;
+
+  const unitResult = database.getFirstSync<{ tx_count: number; total_units: number }>(`
+    SELECT 
+      COUNT(id) as tx_count,
+      COALESCE(SUM(CASE 
+        WHEN type = 'BUY' THEN COALESCE(units, CASE WHEN nav > 0 THEN amount / nav ELSE 0 END)
+        WHEN type = 'SELL' THEN -COALESCE(units, CASE WHEN nav > 0 THEN amount / nav ELSE 0 END)
+        ELSE 0 
+      END), 0) as total_units
+    FROM mf_transactions
+    WHERE fund_id = ?;
+  `, [fundId]);
+
+  const txCount = unitResult?.tx_count || 0;
+  const totalUnits = unitResult?.total_units || 0;
+
+  let newValue = 0;
+  if (txCount === 0 || totalUnits <= 0) {
+    newValue = 0;
+  } else if (fund.current_nav && fund.current_nav > 0) {
+    newValue = Math.round(totalUnits * fund.current_nav * 100) / 100;
+  } else {
+    newValue = fund.current_value;
+  }
+
+  database.runSync(
+    `UPDATE mf_funds 
+     SET current_value = ?, updated_at = datetime('now', 'localtime')
+     WHERE id = ?;`,
+    [newValue, fundId]
+  );
+}
+
 export function addMFTransaction(tx: {
   fund_id: number;
   date: string;
@@ -430,6 +541,9 @@ export function addMFTransaction(tx: {
        VALUES (?, ?, ?, ?, ?, ?);`,
       [tx.fund_id, tx.date, tx.type, tx.amount, tx.nav ?? null, tx.units ?? null]
     );
+
+    // Immediately recalculate fund valuation & units from current NAV
+    syncFundCurrentValue(database, tx.fund_id);
 
     // Sync Mutual Fund allocation
     syncMutualFundAssetAllocation(database);
@@ -457,32 +571,8 @@ export function addMFTransactionsBatch(
       );
     }
 
-    // Recalculate fund current value if current_nav is present
-    const fund = database.getFirstSync<MFFund>(
-      'SELECT * FROM mf_funds WHERE id = ?;',
-      [fundId]
-    );
-    if (fund && fund.current_nav && fund.current_nav > 0) {
-      const unitResult = database.getFirstSync<{ total_units: number }>(`
-        SELECT 
-          COALESCE(SUM(CASE 
-            WHEN type = 'BUY' THEN COALESCE(units, CASE WHEN nav > 0 THEN amount / nav ELSE 0 END)
-            WHEN type = 'SELL' THEN -COALESCE(units, CASE WHEN nav > 0 THEN amount / nav ELSE 0 END)
-            ELSE 0 
-          END), 0) as total_units
-        FROM mf_transactions
-        WHERE fund_id = ?;
-      `, [fundId]);
-
-      const totalUnits = unitResult?.total_units || 0;
-      const newValue = totalUnits > 0 ? Math.round(totalUnits * fund.current_nav * 100) / 100 : 0;
-      database.runSync(
-        `UPDATE mf_funds 
-         SET current_value = ?, updated_at = datetime('now', 'localtime')
-         WHERE id = ?;`,
-        [newValue, fundId]
-      );
-    }
+    // Immediately recalculate fund valuation & units from current NAV
+    syncFundCurrentValue(database, fundId);
 
     // Sync Mutual Fund allocation
     syncMutualFundAssetAllocation(database);
@@ -499,12 +589,21 @@ export function updateMFTransaction(tx: {
 }) {
   const database = getDatabase();
   database.withTransactionSync(() => {
+    const row = database.getFirstSync<{ fund_id: number }>(
+      'SELECT fund_id FROM mf_transactions WHERE id = ?;',
+      [tx.id]
+    );
+
     database.runSync(
       `UPDATE mf_transactions
        SET date = ?, type = ?, amount = ?, nav = ?, units = ?
        WHERE id = ?;`,
       [tx.date, tx.type, tx.amount, tx.nav ?? null, tx.units ?? null, tx.id]
     );
+
+    if (row) {
+      syncFundCurrentValue(database, row.fund_id);
+    }
 
     // Sync Mutual Fund allocation
     syncMutualFundAssetAllocation(database);
@@ -514,9 +613,329 @@ export function updateMFTransaction(tx: {
 export function deleteMFTransaction(transactionId: number) {
   const database = getDatabase();
   database.withTransactionSync(() => {
+    const row = database.getFirstSync<{ fund_id: number }>(
+      'SELECT fund_id FROM mf_transactions WHERE id = ?;',
+      [transactionId]
+    );
+
     database.runSync('DELETE FROM mf_transactions WHERE id = ?;', [transactionId]);
+
+    if (row) {
+      syncFundCurrentValue(database, row.fund_id);
+    }
 
     // Sync Mutual Fund allocation
     syncMutualFundAssetAllocation(database);
+  });
+}
+
+// ==========================================
+// Stock Operations
+// ==========================================
+
+export function fetchStocks(): Stock[] {
+  const database = getDatabase();
+  return database.getAllSync<Stock>(`
+    SELECT 
+      s.id,
+      s.name,
+      s.symbol,
+      s.current_value,
+      s.current_price,
+      s.price_date,
+      s.day_change_pct,
+      s.updated_at,
+      COALESCE(SUM(CASE WHEN t.type = 'BUY' THEN t.amount WHEN t.type = 'SELL' THEN -t.amount WHEN t.type = 'DIVIDEND' THEN -t.amount ELSE 0 END), 0) as total_invested,
+      COALESCE(SUM(CASE WHEN t.type = 'BUY' THEN t.quantity WHEN t.type = 'SELL' THEN -t.quantity ELSE 0 END), 0) as total_quantity,
+      COUNT(t.id) as transaction_count
+    FROM stocks s
+    LEFT JOIN stock_transactions t ON s.id = t.stock_id
+    GROUP BY s.id
+    ORDER BY s.name ASC;
+  `);
+}
+
+export function createStock(
+  name: string,
+  symbol?: string,
+  currentValue: number = 0,
+  currentPrice: number = 0,
+  priceDate?: string,
+  dayChangePct?: number
+): number {
+  const database = getDatabase();
+  let newId = 0;
+  database.withTransactionSync(() => {
+    const res = database.runSync(
+      `INSERT INTO stocks (name, symbol, current_value, current_price, price_date, day_change_pct, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'));`,
+      [name, symbol || null, currentValue, currentPrice, priceDate || null, dayChangePct || null]
+    );
+    newId = Number(res.lastInsertRowId);
+    syncStockAssetAllocation(database);
+  });
+  return newId;
+}
+
+export function updateStockCurrentValue(stockId: number, currentValue: number) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync(
+      `UPDATE stocks 
+       SET current_value = ?, updated_at = datetime('now', 'localtime') 
+       WHERE id = ?;`,
+      [currentValue, stockId]
+    );
+    syncStockAssetAllocation(database);
+  });
+}
+
+export function updateStockDetails(
+  stockId: number,
+  data: {
+    name?: string;
+    symbol?: string;
+    current_value?: number;
+  }
+) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    const existing = database.getFirstSync<Stock>(
+      'SELECT * FROM stocks WHERE id = ?;',
+      [stockId]
+    );
+    if (!existing) return;
+
+    const name = data.name !== undefined ? data.name : existing.name;
+    const symbol = data.symbol !== undefined ? data.symbol : existing.symbol;
+    const curVal = data.current_value !== undefined ? data.current_value : existing.current_value;
+
+    database.runSync(
+      `UPDATE stocks 
+       SET name = ?, symbol = ?, current_value = ?, updated_at = datetime('now', 'localtime') 
+       WHERE id = ?;`,
+      [name, symbol || null, curVal, stockId]
+    );
+    syncStockAssetAllocation(database);
+  });
+}
+
+export function deleteStock(stockId: number) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync('DELETE FROM stocks WHERE id = ?;', [stockId]);
+    syncStockAssetAllocation(database);
+  });
+}
+
+// ==========================================
+// Stock Transaction Operations
+// ==========================================
+
+export function fetchStockTransactions(): StockTransaction[] {
+  const database = getDatabase();
+  return database.getAllSync<StockTransaction>(`
+    SELECT 
+      t.id,
+      t.stock_id,
+      s.name as stock_name,
+      s.symbol as stock_symbol,
+      t.date,
+      t.type,
+      t.price,
+      t.quantity,
+      t.amount,
+      t.created_at
+    FROM stock_transactions t
+    JOIN stocks s ON t.stock_id = s.id
+    ORDER BY t.date DESC, t.id DESC;
+  `);
+}
+
+export function batchUpdateStockPrices(
+  updates: Array<{
+    stockId: number;
+    currentPrice: number;
+    priceDate?: string;
+    dayChangePct?: number;
+  }>
+) {
+  if (updates.length === 0) return;
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    for (const update of updates) {
+      const qtyResult = database.getFirstSync<{ total_quantity: number }>(`
+        SELECT 
+          COALESCE(SUM(CASE WHEN type = 'BUY' THEN quantity WHEN type = 'SELL' THEN -quantity ELSE 0 END), 0) as total_quantity
+        FROM stock_transactions
+        WHERE stock_id = ?;
+      `, [update.stockId]);
+
+      const totalShares = qtyResult?.total_quantity || 0;
+      let newValue = 0;
+      if (totalShares > 0) {
+        newValue = Math.round(totalShares * update.currentPrice * 100) / 100;
+      } else {
+        const existing = database.getFirstSync<{ current_value: number }>(
+          'SELECT current_value FROM stocks WHERE id = ?;',
+          [update.stockId]
+        );
+        newValue = existing?.current_value || 0;
+      }
+
+      database.runSync(
+        `UPDATE stocks 
+         SET current_price = ?, price_date = ?, day_change_pct = ?, current_value = ?, updated_at = datetime('now', 'localtime') 
+         WHERE id = ?;`,
+        [update.currentPrice, update.priceDate || null, update.dayChangePct || null, newValue, update.stockId]
+      );
+    }
+
+    syncStockAssetAllocation(database);
+  });
+}
+
+export function addStockTransaction(tx: {
+  stock_id: number;
+  date: string;
+  type: 'BUY' | 'SELL' | 'DIVIDEND';
+  price: number;
+  quantity: number;
+  amount?: number;
+}) {
+  const database = getDatabase();
+  const calculatedAmount =
+    tx.amount !== undefined && tx.amount > 0
+      ? tx.amount
+      : Math.round(tx.price * tx.quantity * 100) / 100;
+
+  database.withTransactionSync(() => {
+    database.runSync(
+      `INSERT INTO stock_transactions (stock_id, date, type, price, quantity, amount)
+       VALUES (?, ?, ?, ?, ?, ?);`,
+      [tx.stock_id, tx.date, tx.type, tx.price, tx.quantity, calculatedAmount]
+    );
+
+    // Auto-update stock's current_value if current_price exists
+    const stock = database.getFirstSync<Stock>('SELECT * FROM stocks WHERE id = ?;', [tx.stock_id]);
+    if (stock && stock.current_price && stock.current_price > 0) {
+      const qtyResult = database.getFirstSync<{ total_quantity: number }>(`
+        SELECT 
+          COALESCE(SUM(CASE WHEN type = 'BUY' THEN quantity WHEN type = 'SELL' THEN -quantity ELSE 0 END), 0) as total_quantity
+        FROM stock_transactions
+        WHERE stock_id = ?;
+      `, [tx.stock_id]);
+      const totalShares = qtyResult?.total_quantity || 0;
+      const newValue = totalShares > 0 ? Math.round(totalShares * stock.current_price * 100) / 100 : 0;
+      database.runSync(
+        `UPDATE stocks SET current_value = ?, updated_at = datetime('now', 'localtime') WHERE id = ?;`,
+        [newValue, tx.stock_id]
+      );
+    }
+
+    syncStockAssetAllocation(database);
+  });
+}
+
+export function updateStockTransaction(tx: {
+  id: number;
+  date: string;
+  type: 'BUY' | 'SELL' | 'DIVIDEND';
+  price: number;
+  quantity: number;
+  amount?: number;
+}) {
+  const database = getDatabase();
+  const calculatedAmount =
+    tx.amount !== undefined && tx.amount > 0
+      ? tx.amount
+      : Math.round(tx.price * tx.quantity * 100) / 100;
+
+  database.withTransactionSync(() => {
+    database.runSync(
+      `UPDATE stock_transactions
+       SET date = ?, type = ?, price = ?, quantity = ?, amount = ?
+       WHERE id = ?;`,
+      [tx.date, tx.type, tx.price, tx.quantity, calculatedAmount, tx.id]
+    );
+
+    // Auto-update stock's current_value if current_price exists
+    const row = database.getFirstSync<{ stock_id: number }>(
+      'SELECT stock_id FROM stock_transactions WHERE id = ?;',
+      [tx.id]
+    );
+    if (row) {
+      const stock = database.getFirstSync<Stock>('SELECT * FROM stocks WHERE id = ?;', [row.stock_id]);
+      if (stock) {
+        const qtyResult = database.getFirstSync<{ tx_count: number; total_quantity: number }>(`
+          SELECT 
+            COUNT(id) as tx_count,
+            COALESCE(SUM(CASE WHEN type = 'BUY' THEN quantity WHEN type = 'SELL' THEN -quantity ELSE 0 END), 0) as total_quantity
+          FROM stock_transactions
+          WHERE stock_id = ?;
+        `, [row.stock_id]);
+        const totalShares = qtyResult?.total_quantity || 0;
+        const txCount = qtyResult?.tx_count || 0;
+
+        let newValue = 0;
+        if (txCount === 0 || totalShares <= 0) {
+          newValue = 0;
+        } else if (stock.current_price && stock.current_price > 0) {
+          newValue = Math.round(totalShares * stock.current_price * 100) / 100;
+        } else {
+          newValue = stock.current_value;
+        }
+
+        database.runSync(
+          `UPDATE stocks SET current_value = ?, updated_at = datetime('now', 'localtime') WHERE id = ?;`,
+          [newValue, row.stock_id]
+        );
+      }
+    }
+
+    syncStockAssetAllocation(database);
+  });
+}
+
+export function deleteStockTransaction(transactionId: number) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    const row = database.getFirstSync<{ stock_id: number }>(
+      'SELECT stock_id FROM stock_transactions WHERE id = ?;',
+      [transactionId]
+    );
+
+    database.runSync('DELETE FROM stock_transactions WHERE id = ?;', [transactionId]);
+
+    if (row) {
+      const stock = database.getFirstSync<Stock>('SELECT * FROM stocks WHERE id = ?;', [row.stock_id]);
+      if (stock) {
+        const qtyResult = database.getFirstSync<{ tx_count: number; total_quantity: number }>(`
+          SELECT 
+            COUNT(id) as tx_count,
+            COALESCE(SUM(CASE WHEN type = 'BUY' THEN quantity WHEN type = 'SELL' THEN -quantity ELSE 0 END), 0) as total_quantity
+          FROM stock_transactions
+          WHERE stock_id = ?;
+        `, [row.stock_id]);
+        const totalShares = qtyResult?.total_quantity || 0;
+        const txCount = qtyResult?.tx_count || 0;
+
+        let newValue = 0;
+        if (txCount === 0 || totalShares <= 0) {
+          newValue = 0;
+        } else if (stock.current_price && stock.current_price > 0) {
+          newValue = Math.round(totalShares * stock.current_price * 100) / 100;
+        } else {
+          newValue = stock.current_value;
+        }
+
+        database.runSync(
+          `UPDATE stocks SET current_value = ?, updated_at = datetime('now', 'localtime') WHERE id = ?;`,
+          [newValue, row.stock_id]
+        );
+      }
+    }
+
+    syncStockAssetAllocation(database);
   });
 }

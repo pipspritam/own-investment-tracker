@@ -16,6 +16,7 @@ import { MFFund } from '../types';
 import { fetchFundDetails } from '../services/mfapi';
 import FundSearchDropdown, { SelectedFundInfo } from './FundSearchDropdown';
 import BulkOrderImport from './BulkOrderImport';
+import { normalizeDate } from '../utils/csvParser';
 
 interface Props {
   visible: boolean;
@@ -210,9 +211,12 @@ export default function AddTransactionModal({
       return;
     }
 
+    const todayStr = new Date().toISOString().split('T')[0];
+    const cleanDate = date.trim() ? normalizeDate(date.trim()) || date.trim() : todayStr;
+
     onSaveTransaction({
       fund_id: targetFundId,
-      date: date.trim() || new Date().toISOString().split('T')[0],
+      date: cleanDate,
       type,
       amount: parsedAmount,
       nav: nav ? parseFloat(nav) : undefined,
@@ -233,6 +237,7 @@ export default function AddTransactionModal({
     if (funds.length > 0) {
       setIsCreatingFund(false);
     }
+    onClose();
   };
 
   const handleImportBatchOrders = (

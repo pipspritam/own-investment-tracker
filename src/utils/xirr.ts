@@ -12,13 +12,14 @@ export interface CashFlow {
 export function calculateXIRR(cashFlows: CashFlow[]): number | null {
   if (!cashFlows || cashFlows.length < 2) return null;
 
-  // Filter out zero amounts
+  // Filter out zero amounts and invalid dates
   const validFlows = cashFlows
     .filter((c) => Math.abs(c.amount) > 0.0001)
     .map((c) => ({
       amount: c.amount,
       time: typeof c.date === 'string' ? new Date(c.date).getTime() : c.date.getTime(),
-    }));
+    }))
+    .filter((c) => !isNaN(c.time));
 
   if (validFlows.length < 2) return null;
 

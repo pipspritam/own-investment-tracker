@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { MFTransaction } from '../types';
+import { normalizeDate } from '../utils/csvParser';
 
 interface Props {
   transaction: MFTransaction | null;
@@ -76,14 +77,17 @@ export default function EditTransactionModal({
       return;
     }
 
+    const cleanDate = date.trim() ? normalizeDate(date.trim()) || date.trim() : transaction.date;
+
     onSave({
       id: transaction.id,
-      date: date.trim() || transaction.date,
+      date: cleanDate,
       type,
       amount: parsedAmount,
       nav: nav ? parseFloat(nav) : undefined,
       units: units ? parseFloat(units) : undefined,
     });
+    onClose();
   };
 
   return (
