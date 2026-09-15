@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { AssetAllocation, MFFund, MFTransaction, PortfolioSummary, Stock, StockTransaction } from '../types';
+import { AssetAllocation, MFFund, MFTransaction, PortfolioSummary, Stock, StockTransaction, PPFAccount, PPFTransaction, EPFAccount, EPFTransaction, CategoryVisibility } from '../types';
 import * as db from '../db/database';
 import { fetchFundDetails } from '../services/mfapi';
 import { fetchStockPrice } from '../services/stockPrice';
@@ -11,6 +11,11 @@ interface InvestmentContextType {
   transactions: MFTransaction[];
   stocks: Stock[];
   stockTransactions: StockTransaction[];
+  ppfAccount: PPFAccount | null;
+  ppfTransactions: PPFTransaction[];
+  epfAccount: EPFAccount | null;
+  epfTransactions: EPFTransaction[];
+  categoryVisibility: CategoryVisibility;
   portfolioSummary: PortfolioSummary;
   isRefreshingNAVs: boolean;
   isRefreshingStockPrices: boolean;
@@ -100,7 +105,46 @@ interface InvestmentContextType {
     amount?: number;
   }) => void;
   deleteStockTransaction: (id: number) => void;
+
+  // PPF operations
+  updatePPFValue: (currentValue: number, accountNumber?: string, bankName?: string) => void;
+  addNewPPFTransaction: (tx: {
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => void;
+  editPPFTransaction: (tx: {
+    id: number;
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => void;
+  deletePPFTransaction: (id: number) => void;
+
+  // EPF operations
+  updateEPFValue: (currentValue: number, uan?: string, companyName?: string) => void;
+  addNewEPFTransaction: (tx: {
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => void;
+  editEPFTransaction: (tx: {
+    id: number;
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => void;
+  deleteEPFTransaction: (id: number) => void;
+
+  // Category Visibility operations
+  updateCategoryVisibility: (visibility: CategoryVisibility) => void;
+  toggleCategoryVisibility: (category: keyof CategoryVisibility) => void;
 }
+
 
 const InvestmentContext = createContext<InvestmentContextType | undefined>(undefined);
 
@@ -110,6 +154,11 @@ export const InvestmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [transactions, setTransactions] = useState<MFTransaction[]>([]);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [stockTransactions, setStockTransactions] = useState<StockTransaction[]>([]);
+  const [ppfAccount, setPpfAccount] = useState<PPFAccount | null>(null);
+  const [ppfTransactions, setPpfTransactions] = useState<PPFTransaction[]>([]);
+  const [epfAccount, setEpfAccount] = useState<EPFAccount | null>(null);
+  const [epfTransactions, setEpfTransactions] = useState<EPFTransaction[]>([]);
+  const [categoryVisibility, setCategoryVisibility] = useState<CategoryVisibility>(() => db.getCategoryVisibility());
   const [isRefreshingNAVs, setIsRefreshingNAVs] = useState(false);
   const [isRefreshingStockPrices, setIsRefreshingStockPrices] = useState(false);
 
@@ -120,15 +169,28 @@ export const InvestmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const freshTransactions = db.fetchTransactions();
       const freshStocks = db.fetchStocks();
       const freshStockTransactions = db.fetchStockTransactions();
+      const freshPPFAccount = db.fetchPPFAccount();
+      const freshPPFTransactions = db.fetchPPFTransactions();
+      const freshEPFAccount = db.fetchEPFAccount();
+      const freshEPFTransactions = db.fetchEPFTransactions();
+      const freshVisibility = db.getCategoryVisibility();
       setAssets(freshAssets);
       setFunds(freshFunds);
       setTransactions(freshTransactions);
       setStocks(freshStocks);
       setStockTransactions(freshStockTransactions);
+      setPpfAccount(freshPPFAccount);
+      setPpfTransactions(freshPPFTransactions);
+      setEpfAccount(freshEPFAccount);
+      setEpfTransactions(freshEPFTransactions);
+      setCategoryVisibility(freshVisibility);
     } catch (error) {
       console.error('Error refreshing investment data:', error);
     }
   }, []);
+
+
+
 
   const refreshAllFundNAVs = useCallback(async (): Promise<{ success: number; failed: number }> => {
     setIsRefreshingNAVs(true);
@@ -440,10 +502,93 @@ export const InvestmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     refreshData();
   };
 
-  // Net worth and invested totals are derived strictly from Mutual Fund and Stock
-  const trackedAssets = assets.filter(
-    (a) => a.asset_type === 'Mutual Fund' || a.asset_type === 'Stock'
-  );
+  // PPF Operations
+  const updatePPFValue = (currentValue: number, accountNumber?: string, bankName?: string) => {
+    db.updatePPFCurrentValue(currentValue, accountNumber, bankName);
+    refreshData();
+  };
+
+  const addNewPPFTransaction = (tx: {
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => {
+    db.addPPFTransaction(tx);
+    refreshData();
+  };
+
+  const editPPFTransaction = (tx: {
+    id: number;
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => {
+    db.updatePPFTransaction(tx);
+    refreshData();
+  };
+
+  const deletePPFTransaction = (id: number) => {
+    db.deletePPFTransaction(id);
+    refreshData();
+  };
+
+  // EPF Operations
+  const updateEPFValue = (currentValue: number, uan?: string, companyName?: string) => {
+    db.updateEPFCurrentValue(currentValue, uan, companyName);
+    refreshData();
+  };
+
+  const addNewEPFTransaction = (tx: {
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => {
+    db.addEPFTransaction(tx);
+    refreshData();
+  };
+
+  const editEPFTransaction = (tx: {
+    id: number;
+    date: string;
+    type: 'INVEST' | 'WITHDRAW';
+    amount: number;
+    notes?: string;
+  }) => {
+    db.updateEPFTransaction(tx);
+    refreshData();
+  };
+
+  const deleteEPFTransaction = (id: number) => {
+    db.deleteEPFTransaction(id);
+    refreshData();
+  };
+
+  // Category Visibility Operations
+  const updateCategoryVisibility = (newVisibility: CategoryVisibility) => {
+    db.saveCategoryVisibility(newVisibility);
+    setCategoryVisibility(newVisibility);
+    refreshData();
+  };
+
+  const toggleCategoryVisibility = (category: keyof CategoryVisibility) => {
+    setCategoryVisibility((prev) => {
+      const updated = { ...prev, [category]: !prev[category] };
+      db.saveCategoryVisibility(updated);
+      return updated;
+    });
+  };
+
+  // Net worth and invested totals are derived strictly from currently visible categories
+  const trackedAssets = assets.filter((a) => {
+    if (a.asset_type === 'Mutual Fund') return categoryVisibility.mutualfunds;
+    if (a.asset_type === 'Stock') return categoryVisibility.stocks;
+    if (a.asset_type === 'PPF') return categoryVisibility.ppf;
+    if (a.asset_type === 'EPF') return categoryVisibility.epf;
+    return false;
+  });
   const totalNetWorth = trackedAssets.reduce((sum, a) => sum + a.current_value, 0);
   const totalInvested = trackedAssets.reduce((sum, a) => sum + a.invested_amount, 0);
   const absoluteReturn = totalNetWorth - totalInvested;
@@ -457,6 +602,11 @@ export const InvestmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         transactions,
         stocks,
         stockTransactions,
+        ppfAccount,
+        ppfTransactions,
+        epfAccount,
+        epfTransactions,
+        categoryVisibility,
         portfolioSummary: {
           totalNetWorth,
           totalInvested,
@@ -485,12 +635,25 @@ export const InvestmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         addNewStockTransaction,
         editStockTransaction,
         deleteStockTransaction,
+        updatePPFValue,
+        addNewPPFTransaction,
+        editPPFTransaction,
+        deletePPFTransaction,
+        updateEPFValue,
+        addNewEPFTransaction,
+        editEPFTransaction,
+        deleteEPFTransaction,
+        updateCategoryVisibility,
+        toggleCategoryVisibility,
       }}
     >
       {children}
     </InvestmentContext.Provider>
   );
 };
+
+
+
 
 export const useInvestment = () => {
   const context = useContext(InvestmentContext);

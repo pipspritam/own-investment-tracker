@@ -1,17 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, StatusBar as RNStatusBar } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { InvestmentProvider } from './src/context/InvestmentContext';
+import { InvestmentProvider, useInvestment } from './src/context/InvestmentContext';
 import NetWorthScreen from './src/screens/NetWorthScreen';
 import MutualFundsScreen from './src/screens/MutualFundsScreen';
 import IndianStocksScreen from './src/screens/IndianStocksScreen';
+import PPFScreen from './src/screens/PPFScreen';
+import EPFScreen from './src/screens/EPFScreen';
 
-type TabType = 'networth' | 'mutualfunds' | 'stocks';
+type TabType = 'networth' | 'mutualfunds' | 'stocks' | 'ppf' | 'epf';
 
 function MainApp() {
+  const { categoryVisibility } = useInvestment();
   const [currentTab, setCurrentTab] = useState<TabType>('networth');
   const insets = useSafeAreaInsets();
+
+  // If the currently selected tab gets hidden in settings, auto-fallback to 'networth'
+  useEffect(() => {
+    if (currentTab !== 'networth' && categoryVisibility && !categoryVisibility[currentTab]) {
+      setCurrentTab('networth');
+    }
+  }, [currentTab, categoryVisibility]);
 
   return (
     <View style={styles.container}>
@@ -22,8 +32,10 @@ function MainApp() {
         {currentTab === 'networth' && (
           <NetWorthScreen onNavigate={(tab) => setCurrentTab(tab)} />
         )}
-        {currentTab === 'mutualfunds' && <MutualFundsScreen />}
-        {currentTab === 'stocks' && <IndianStocksScreen />}
+        {currentTab === 'mutualfunds' && categoryVisibility?.mutualfunds && <MutualFundsScreen />}
+        {currentTab === 'stocks' && categoryVisibility?.stocks && <IndianStocksScreen />}
+        {currentTab === 'ppf' && categoryVisibility?.ppf && <PPFScreen />}
+        {currentTab === 'epf' && categoryVisibility?.epf && <EPFScreen />}
       </View>
 
       {/* Bottom Navigation Bar */}
@@ -53,43 +65,87 @@ function MainApp() {
           {currentTab === 'networth' && <View style={styles.tabIndicator} />}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tabItem, currentTab === 'mutualfunds' && styles.activeTabItem]}
-          onPress={() => setCurrentTab('mutualfunds')}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.tabIcon}>📈</Text>
-          <Text
-            style={[
-              styles.tabLabel,
-              currentTab === 'mutualfunds' ? styles.activeTabLabel : styles.inactiveTabLabel,
-            ]}
+        {categoryVisibility?.mutualfunds && (
+          <TouchableOpacity
+            style={[styles.tabItem, currentTab === 'mutualfunds' && styles.activeTabItem]}
+            onPress={() => setCurrentTab('mutualfunds')}
+            activeOpacity={0.75}
           >
-            Mutual Funds
-          </Text>
-          {currentTab === 'mutualfunds' && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
+            <Text style={styles.tabIcon}>📈</Text>
+            <Text
+              style={[
+                styles.tabLabel,
+                currentTab === 'mutualfunds' ? styles.activeTabLabel : styles.inactiveTabLabel,
+              ]}
+            >
+              Mutual Funds
+            </Text>
+            {currentTab === 'mutualfunds' && <View style={styles.tabIndicator} />}
+          </TouchableOpacity>
+        )}
 
-        <TouchableOpacity
-          style={[styles.tabItem, currentTab === 'stocks' && styles.activeTabItem]}
-          onPress={() => setCurrentTab('stocks')}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.tabIcon}>💹</Text>
-          <Text
-            style={[
-              styles.tabLabel,
-              currentTab === 'stocks' ? styles.activeTabLabel : styles.inactiveTabLabel,
-            ]}
+        {categoryVisibility?.stocks && (
+          <TouchableOpacity
+            style={[styles.tabItem, currentTab === 'stocks' && styles.activeTabItem]}
+            onPress={() => setCurrentTab('stocks')}
+            activeOpacity={0.75}
           >
-            Indian Stocks
-          </Text>
-          {currentTab === 'stocks' && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
+            <Text style={styles.tabIcon}>💹</Text>
+            <Text
+              style={[
+                styles.tabLabel,
+                currentTab === 'stocks' ? styles.activeTabLabel : styles.inactiveTabLabel,
+              ]}
+            >
+              Indian Stocks
+            </Text>
+            {currentTab === 'stocks' && <View style={styles.tabIndicator} />}
+          </TouchableOpacity>
+        )}
+
+        {categoryVisibility?.ppf && (
+          <TouchableOpacity
+            style={[styles.tabItem, currentTab === 'ppf' && styles.activeTabItem]}
+            onPress={() => setCurrentTab('ppf')}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.tabIcon}>🏦</Text>
+            <Text
+              style={[
+                styles.tabLabel,
+                currentTab === 'ppf' ? styles.activeTabLabel : styles.inactiveTabLabel,
+              ]}
+            >
+              PPF
+            </Text>
+            {currentTab === 'ppf' && <View style={styles.tabIndicator} />}
+          </TouchableOpacity>
+        )}
+
+        {categoryVisibility?.epf && (
+          <TouchableOpacity
+            style={[styles.tabItem, currentTab === 'epf' && styles.activeTabItem]}
+            onPress={() => setCurrentTab('epf')}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.tabIcon}>🏛️</Text>
+            <Text
+              style={[
+                styles.tabLabel,
+                currentTab === 'epf' ? styles.activeTabLabel : styles.inactiveTabLabel,
+              ]}
+            >
+              EPF
+            </Text>
+            {currentTab === 'epf' && <View style={styles.tabIndicator} />}
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
 }
+
+
 
 export default function App() {
   return (

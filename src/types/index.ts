@@ -67,3 +67,51 @@ export interface StockTransaction {
   amount: number; // Auto-calculated: price * quantity
   created_at?: string;
 }
+
+export interface PPFTransaction {
+  id: number;
+  date: string; // YYYY-MM-DD
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+  created_at?: string;
+}
+
+export interface PPFAccount {
+  id: number;
+  account_number?: string;
+  bank_name?: string;
+  current_value: number; // Manual input by user
+  total_invested: number; // Auto-calculated: SUM(INVEST) - SUM(WITHDRAW)
+  transaction_count: number;
+  updated_at?: string;
+}
+
+export interface EPFTransaction {
+  id: number;
+  date: string; // YYYY-MM-DD
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+  created_at?: string;
+}
+
+export interface EPFAccount {
+  id: number;
+  uan?: string; // Universal Account Number
+  company_name?: string; // Current employer / company
+  current_value: number; // Manual input by user from EPFO passbook
+  total_invested: number; // Auto-calculated: SUM(INVEST) - SUM(WITHDRAW)
+  transaction_count: number;
+  updated_at?: string;
+}
+
+export interface CategoryVisibility {
+  mutualfunds: boolean;
+  stocks: boolean;
+  ppf: boolean;
+  epf: boolean;
+}
+
+
+

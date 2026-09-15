@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { AssetAllocation, MFFund, MFTransaction, Stock, StockTransaction } from '../types';
+import { AssetAllocation, MFFund, MFTransaction, Stock, StockTransaction, PPFAccount, PPFTransaction, EPFAccount, EPFTransaction, CategoryVisibility } from '../types';
 
 const DB_NAME = 'investments.db';
 let dbInstance: SQLite.SQLiteDatabase | null = null;
@@ -70,6 +70,45 @@ function initDatabase(database: SQLite.SQLiteDatabase) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(stock_id) REFERENCES stocks(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS ppf_account (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_number TEXT,
+      bank_name TEXT,
+      current_value REAL NOT NULL DEFAULT 0,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ppf_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS epf_account (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uan TEXT,
+      company_name TEXT,
+      current_value REAL NOT NULL DEFAULT 0,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS epf_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Migration: Ensure current_value, scheme_code, current_nav, nav_date, and updated_at columns exist
@@ -139,20 +178,44 @@ function initDatabase(database: SQLite.SQLiteDatabase) {
     }
   }
 
-  // Always keep Mutual Fund and Stock allocations in asset_allocations in sync with transactions and holdings
+  // Ensure default PPF account row exists
+  const ppfAcc = database.getFirstSync<{ count: number }>(
+    'SELECT COUNT(*) as count FROM ppf_account;'
+  );
+  if (!ppfAcc || ppfAcc.count === 0) {
+    database.runSync(
+      `INSERT INTO ppf_account (id, account_number, bank_name, current_value, updated_at)
+       VALUES (1, '', '', 0, datetime('now', 'localtime'));`
+    );
+  }
+
+  // Ensure default EPF account row exists
+  const epfAcc = database.getFirstSync<{ count: number }>(
+    'SELECT COUNT(*) as count FROM epf_account;'
+  );
+  if (!epfAcc || epfAcc.count === 0) {
+    database.runSync(
+      `INSERT INTO epf_account (id, uan, company_name, current_value, updated_at)
+       VALUES (1, '', '', 0, datetime('now', 'localtime'));`
+    );
+  }
+
+  // Always keep Mutual Fund, Stock, PPF, and EPF allocations in asset_allocations in sync with transactions and holdings
   syncMutualFundAssetAllocation(database);
   syncStockAssetAllocation(database);
+  syncPPFAssetAllocation(database);
+  syncEPFAssetAllocation(database);
 }
 
 function seedDatabase(database: SQLite.SQLiteDatabase) {
-  // Mutual Fund and Stock start at 0 invested and 0 current value until user enters them.
+  // Mutual Fund, Stock, PPF, and EPF start at 0 invested and 0 current value until user enters them.
   const initialAssets = [
     { type: 'Mutual Fund', invested: 0, current: 0 },
     { type: 'Stock', invested: 0, current: 0 },
-    { type: 'EPF', invested: 230000, current: 249444 },
+    { type: 'PPF', invested: 0, current: 0 },
+    { type: 'EPF', invested: 0, current: 0 },
     { type: 'Gold', invested: 80000, current: 90682 },
     { type: 'TI ESPP', invested: 42000, current: 48000 },
-    { type: 'PPF', invested: 8500, current: 9263 },
     { type: 'Crypto', invested: 2500, current: 2524 },
   ];
 
@@ -218,6 +281,82 @@ export function syncStockAssetAllocation(database: SQLite.SQLiteDatabase) {
     [totalInvested, totalCurrent]
   );
 }
+
+/**
+ * Synchronizes the 'PPF' entry in asset_allocations:
+ * - invested_amount is dynamically calculated as the net sum of all invest/withdraw transactions (SUM(INVEST) - SUM(WITHDRAW))
+ * - current_value is taken from the ppf_account manual value
+ */
+export function syncPPFAssetAllocation(database: SQLite.SQLiteDatabase) {
+  const totalInvestedResult = database.getFirstSync<{ total_invested: number }>(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'INVEST' THEN amount WHEN type = 'WITHDRAW' THEN -amount ELSE 0 END), 0) as total_invested
+    FROM ppf_transactions;
+  `);
+  const totalInvested = totalInvestedResult?.total_invested ?? 0;
+
+  const currentResult = database.getFirstSync<{ current_value: number }>(`
+    SELECT current_value FROM ppf_account LIMIT 1;
+  `);
+  const currentValue = currentResult?.current_value ?? 0;
+
+  const existingRow = database.getFirstSync<{ id: number }>(`
+    SELECT id FROM asset_allocations WHERE asset_type = 'PPF';
+  `);
+
+  if (existingRow) {
+    database.runSync(
+      `UPDATE asset_allocations 
+       SET invested_amount = ?, current_value = ?, updated_at = datetime('now')
+       WHERE asset_type = 'PPF';`,
+      [totalInvested, currentValue]
+    );
+  } else {
+    database.runSync(
+      `INSERT INTO asset_allocations (asset_type, invested_amount, current_value, updated_at)
+       VALUES ('PPF', ?, ?, datetime('now'));`,
+      [totalInvested, currentValue]
+    );
+  }
+}
+
+/**
+ * Synchronizes the 'EPF' entry in asset_allocations:
+ * - invested_amount is dynamically calculated as the net sum of all invest/withdraw transactions (SUM(INVEST) - SUM(WITHDRAW))
+ * - current_value is taken from the epf_account manual value
+ */
+export function syncEPFAssetAllocation(database: SQLite.SQLiteDatabase) {
+  const totalInvestedResult = database.getFirstSync<{ total_invested: number }>(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'INVEST' THEN amount WHEN type = 'WITHDRAW' THEN -amount ELSE 0 END), 0) as total_invested
+    FROM epf_transactions;
+  `);
+  const totalInvested = totalInvestedResult?.total_invested ?? 0;
+
+  const currentResult = database.getFirstSync<{ current_value: number }>(`
+    SELECT current_value FROM epf_account LIMIT 1;
+  `);
+  const currentValue = currentResult?.current_value ?? 0;
+
+  const existingRow = database.getFirstSync<{ id: number }>(`
+    SELECT id FROM asset_allocations WHERE asset_type = 'EPF';
+  `);
+
+  if (existingRow) {
+    database.runSync(
+      `UPDATE asset_allocations 
+       SET invested_amount = ?, current_value = ?, updated_at = datetime('now')
+       WHERE asset_type = 'EPF';`,
+      [totalInvested, currentValue]
+    );
+  } else {
+    database.runSync(
+      `INSERT INTO asset_allocations (asset_type, invested_amount, current_value, updated_at)
+       VALUES ('EPF', ?, ?, datetime('now'));`,
+      [totalInvested, currentValue]
+    );
+  }
+}
+
+
 
 // Asset Operations
 export function fetchAssetAllocations(): AssetAllocation[] {
@@ -939,3 +1078,272 @@ export function deleteStockTransaction(transactionId: number) {
     syncStockAssetAllocation(database);
   });
 }
+
+// ==========================================
+// PPF (Public Provident Fund) Operations
+// ==========================================
+
+export function fetchPPFAccount(): PPFAccount | null {
+  const database = getDatabase();
+  const row = database.getFirstSync<{
+    id: number;
+    account_number: string | null;
+    bank_name: string | null;
+    current_value: number;
+    updated_at: string | null;
+  }>('SELECT * FROM ppf_account LIMIT 1;');
+
+  if (!row) return null;
+
+  const stats = database.getFirstSync<{ total_invested: number; tx_count: number }>(`
+    SELECT 
+      COALESCE(SUM(CASE WHEN type = 'INVEST' THEN amount WHEN type = 'WITHDRAW' THEN -amount ELSE 0 END), 0) as total_invested,
+      COUNT(id) as tx_count
+    FROM ppf_transactions;
+  `);
+
+  return {
+    id: row.id,
+    account_number: row.account_number || undefined,
+    bank_name: row.bank_name || undefined,
+    current_value: row.current_value,
+    total_invested: stats?.total_invested ?? 0,
+    transaction_count: stats?.tx_count ?? 0,
+    updated_at: row.updated_at || undefined,
+  };
+}
+
+export function updatePPFCurrentValue(currentValue: number, accountNumber?: string, bankName?: string) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    if (accountNumber !== undefined || bankName !== undefined) {
+      database.runSync(
+        `UPDATE ppf_account 
+         SET current_value = ?, 
+             account_number = COALESCE(?, account_number), 
+             bank_name = COALESCE(?, bank_name), 
+             updated_at = datetime('now', 'localtime') 
+         WHERE id = 1;`,
+        [currentValue, accountNumber ?? null, bankName ?? null]
+      );
+    } else {
+      database.runSync(
+        `UPDATE ppf_account 
+         SET current_value = ?, updated_at = datetime('now', 'localtime') 
+         WHERE id = 1;`,
+        [currentValue]
+      );
+    }
+    syncPPFAssetAllocation(database);
+  });
+}
+
+export function fetchPPFTransactions(): PPFTransaction[] {
+  const database = getDatabase();
+  return database.getAllSync<PPFTransaction>(
+    'SELECT * FROM ppf_transactions ORDER BY date DESC, id DESC;'
+  );
+}
+
+export function addPPFTransaction(tx: {
+  date: string;
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+}): number {
+  const database = getDatabase();
+  let newId = 0;
+  database.withTransactionSync(() => {
+    const result = database.runSync(
+      `INSERT INTO ppf_transactions (date, type, amount, notes) VALUES (?, ?, ?, ?);`,
+      [tx.date, tx.type, tx.amount, tx.notes?.trim() || null]
+    );
+    newId = result.lastInsertRowId;
+    syncPPFAssetAllocation(database);
+  });
+  return newId;
+}
+
+export function updatePPFTransaction(tx: {
+  id: number;
+  date: string;
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+}) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync(
+      `UPDATE ppf_transactions 
+       SET date = ?, type = ?, amount = ?, notes = ? 
+       WHERE id = ?;`,
+      [tx.date, tx.type, tx.amount, tx.notes?.trim() || null, tx.id]
+    );
+    syncPPFAssetAllocation(database);
+  });
+}
+
+export function deletePPFTransaction(transactionId: number) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync('DELETE FROM ppf_transactions WHERE id = ?;', [transactionId]);
+    syncPPFAssetAllocation(database);
+  });
+}
+
+// ==========================================
+// EPF (Employees' Provident Fund) Operations
+// ==========================================
+
+export function fetchEPFAccount(): EPFAccount | null {
+  const database = getDatabase();
+  const row = database.getFirstSync<{
+    id: number;
+    uan: string | null;
+    company_name: string | null;
+    current_value: number;
+    updated_at: string | null;
+  }>('SELECT * FROM epf_account LIMIT 1;');
+
+  if (!row) return null;
+
+  const stats = database.getFirstSync<{ total_invested: number; tx_count: number }>(`
+    SELECT 
+      COALESCE(SUM(CASE WHEN type = 'INVEST' THEN amount WHEN type = 'WITHDRAW' THEN -amount ELSE 0 END), 0) as total_invested,
+      COUNT(id) as tx_count
+    FROM epf_transactions;
+  `);
+
+  return {
+    id: row.id,
+    uan: row.uan || undefined,
+    company_name: row.company_name || undefined,
+    current_value: row.current_value,
+    total_invested: stats?.total_invested ?? 0,
+    transaction_count: stats?.tx_count ?? 0,
+    updated_at: row.updated_at || undefined,
+  };
+}
+
+export function updateEPFCurrentValue(currentValue: number, uan?: string, companyName?: string) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    if (uan !== undefined || companyName !== undefined) {
+      database.runSync(
+        `UPDATE epf_account 
+         SET current_value = ?, 
+             uan = COALESCE(?, uan), 
+             company_name = COALESCE(?, company_name), 
+             updated_at = datetime('now', 'localtime') 
+         WHERE id = 1;`,
+        [currentValue, uan ?? null, companyName ?? null]
+      );
+    } else {
+      database.runSync(
+        `UPDATE epf_account 
+         SET current_value = ?, updated_at = datetime('now', 'localtime') 
+         WHERE id = 1;`,
+        [currentValue]
+      );
+    }
+    syncEPFAssetAllocation(database);
+  });
+}
+
+export function fetchEPFTransactions(): EPFTransaction[] {
+  const database = getDatabase();
+  return database.getAllSync<EPFTransaction>(
+    'SELECT * FROM epf_transactions ORDER BY date DESC, id DESC;'
+  );
+}
+
+export function addEPFTransaction(tx: {
+  date: string;
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+}): number {
+  const database = getDatabase();
+  let newId = 0;
+  database.withTransactionSync(() => {
+    const result = database.runSync(
+      `INSERT INTO epf_transactions (date, type, amount, notes) VALUES (?, ?, ?, ?);`,
+      [tx.date, tx.type, tx.amount, tx.notes?.trim() || null]
+    );
+    newId = result.lastInsertRowId;
+    syncEPFAssetAllocation(database);
+  });
+  return newId;
+}
+
+export function updateEPFTransaction(tx: {
+  id: number;
+  date: string;
+  type: 'INVEST' | 'WITHDRAW';
+  amount: number;
+  notes?: string;
+}) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync(
+      `UPDATE epf_transactions 
+       SET date = ?, type = ?, amount = ?, notes = ? 
+       WHERE id = ?;`,
+      [tx.date, tx.type, tx.amount, tx.notes?.trim() || null, tx.id]
+    );
+    syncEPFAssetAllocation(database);
+  });
+}
+
+export function deleteEPFTransaction(transactionId: number) {
+  const database = getDatabase();
+  database.withTransactionSync(() => {
+    database.runSync('DELETE FROM epf_transactions WHERE id = ?;', [transactionId]);
+    syncEPFAssetAllocation(database);
+  });
+}
+
+// ==========================================
+// App Settings & Category Visibility
+// ==========================================
+
+const DEFAULT_CATEGORY_VISIBILITY: CategoryVisibility = {
+  mutualfunds: true,
+  stocks: true,
+  ppf: true,
+  epf: true,
+};
+
+export function getCategoryVisibility(): CategoryVisibility {
+  const database = getDatabase();
+  try {
+    const row = database.getFirstSync<{ value: string }>(
+      'SELECT value FROM app_settings WHERE key = ?;',
+      ['category_visibility']
+    );
+    if (row && row.value) {
+      const parsed = JSON.parse(row.value);
+      return {
+        mutualfunds: parsed.mutualfunds ?? true,
+        stocks: parsed.stocks ?? true,
+        ppf: parsed.ppf ?? true,
+        epf: parsed.epf ?? true,
+      };
+    }
+  } catch (err) {
+    console.error('Error fetching category visibility from db:', err);
+  }
+  return DEFAULT_CATEGORY_VISIBILITY;
+}
+
+export function saveCategoryVisibility(visibility: CategoryVisibility): void {
+  const database = getDatabase();
+  database.runSync(
+    `INSERT INTO app_settings (key, value) VALUES ('category_visibility', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value;`,
+    [JSON.stringify(visibility)]
+  );
+}
+
+
+
