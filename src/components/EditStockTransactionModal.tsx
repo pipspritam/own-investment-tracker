@@ -14,6 +14,7 @@ import {
 import { StockTransaction } from '../types';
 import { formatINR } from '../utils/currency';
 import { normalizeDate } from '../utils/csvParser';
+import DatePickerInput from './DatePickerInput';
 
 interface Props {
   transaction: StockTransaction | null;
@@ -251,14 +252,11 @@ export default function EditStockTransactionModal({
               )}
             </View>
 
-            {/* Date */}
-            <Text style={styles.inputLabel}>Date (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#64748B"
+            {/* Date with Input and Picker */}
+            <DatePickerInput
+              label="Date (YYYY-MM-DD)"
               value={date}
-              onChangeText={setDate}
+              onChangeDate={setDate}
             />
 
             {/* Save & Delete Buttons */}

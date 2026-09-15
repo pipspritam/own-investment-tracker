@@ -17,6 +17,7 @@ import { fetchFundDetails } from '../services/mfapi';
 import FundSearchDropdown, { SelectedFundInfo } from './FundSearchDropdown';
 import BulkOrderImport from './BulkOrderImport';
 import { normalizeDate } from '../utils/csvParser';
+import DatePickerInput from './DatePickerInput';
 
 interface Props {
   visible: boolean;
@@ -520,13 +521,11 @@ export default function AddTransactionModal({
                   onChangeText={handleAmountChange}
                 />
 
-                {/* Date */}
-                <Text style={styles.inputLabel}>Date (YYYY-MM-DD)</Text>
-                <TextInput
-                  style={styles.input}
+                {/* Date with Input and Picker */}
+                <DatePickerInput
+                  label="Date (YYYY-MM-DD)"
                   value={date}
-                  placeholderTextColor="#64748B"
-                  onChangeText={setDate}
+                  onChangeDate={setDate}
                 />
 
                 {/* Purchase NAV & Units */}

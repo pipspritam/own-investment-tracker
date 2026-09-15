@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MFTransaction } from '../types';
 import { normalizeDate } from '../utils/csvParser';
+import DatePickerInput from './DatePickerInput';
 
 interface Props {
   transaction: MFTransaction | null;
@@ -145,13 +146,11 @@ export default function EditTransactionModal({
               onChangeText={handleAmountChange}
             />
 
-            {/* Date */}
-            <Text style={styles.inputLabel}>Date (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.input}
+            {/* Date with Input and Picker */}
+            <DatePickerInput
+              label="Date (YYYY-MM-DD)"
               value={date}
-              placeholderTextColor="#64748B"
-              onChangeText={setDate}
+              onChangeDate={setDate}
             />
 
             {/* NAV & Units */}
